@@ -37,7 +37,7 @@ class ChatSession:
         }
 
     def update(self, key, value):
-        if value:
+        if value and self.complaint_details[key] is None:
             self.complaint_details[key] = value.strip()
 
     def is_complete(self):
@@ -82,7 +82,7 @@ def extract_info(session, text):
         words = text.split()
         session.update("name", words[-1])
 
-    # Description (longer sentences only if missing)
+    # Description
     if len(text.split()) > 6 and not session.complaint_details["description"]:
         session.update("description", text)
 
@@ -92,7 +92,7 @@ async def start_chat():
     session = ChatSession()
     cl.user_session.set("chat_session", session)
 
-    welcome = f"# {BOT_EMOJI} Welcome to {BOT_NAME}\nHello! Tell me what problem you are facing."
+    welcome = f"# {BOT_EMOJI} Welcome to {BOT_NAME}\nHello! Let's start — tell me about the problem."
     await cl.Message(content=welcome).send()
 
 @cl.on_message
@@ -107,10 +107,11 @@ async def handle_message(message: cl.Message):
 
     details = session.complaint_details
 
-    # Build smart prompt for Gemini
+    # Build contextual prompt for Gemini
     prompt = f"""
 You are a civic complaint assistant.
-Current known details:
+
+Current known details (use these as the single source of truth):
 - Complaint ID: {details['complaint_id']}
 - Issue Type: {details['issue_type']}
 - Name: {details['name']}
@@ -118,20 +119,22 @@ Current known details:
 - Description: {details['description']}
 
 Rules:
-- Do NOT ask again for details that are already filled.
-- Only ask about missing details.
-- If all details are filled, confirm registration and show the summary.
-- Keep tone interactive and natural.
+1. Treat all non-None fields above as FINAL. Never ask for them again.
+2. Only ask about the first missing detail (Issue Type → Name → Phone → Description).
+3. Do not doubt or re-confirm already provided details.
+4. If all details are complete, confirm registration and show the summary.
+5. Keep tone interactive and friendly, but concise.
 
 User just said: "{user_input}"
 Assistant:
 """
 
+
     # Send to Gemini
     response = model.generate_content(prompt)
     reply = response.text.strip()
 
-    # If all info gathered → finalize
+    # If complete → finalize
     if session.is_complete():
         if not details["complaint_id"]:
             session.generate_id()
